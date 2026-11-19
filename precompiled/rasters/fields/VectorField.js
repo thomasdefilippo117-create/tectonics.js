@@ -67,6 +67,8 @@ VectorField.dot_vector_field = function(vector_field1, vector_field2, result) {
     var u = vector_field1.everything;
     var v = vector_field2.everything;
 
+    // the loop accumulates, so the result must start at zero (callers often pass reused scratch rasters)
+    result.fill(0);
     var length = result.length;
     for (var i=0, li=u.length; i<li; ++i) {
         result[i%length] += u[i] * v[i];

@@ -12,6 +12,9 @@ function World(parameters) {
     // "name" is the name of the world as understood by the user.
     // It is randomly generated and can be modified by the user at any time. 
     this.name = parameters.name;
+    // "preset" records how the world was generated, e.g. 'earth' for the present-day Earth preset
+    // It lets the app regenerate the same kind of world when the grid resolution changes.
+    this.preset = parameters.preset;
     this.grid = new Grid(parameters['grid']) || stop('missing parameter: "grid"');
 
     // all heat capacities in Joules per Kelvin
@@ -67,6 +70,7 @@ function World(parameters) {
             grid:                     this.grid.getParameters(),
             id:                     this.id,
             name:                     this.name,
+            preset:                 this.preset,
             material_heat_capacity: this.material_heat_capacity,
             material_viscosity:     this.material_viscosity,
             material_density:         this.material_density,

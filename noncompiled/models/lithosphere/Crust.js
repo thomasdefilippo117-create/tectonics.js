@@ -97,12 +97,14 @@ Crust.reset = function(crust) {
     crust.everything.fill(0);
 }
 Crust.mult_field = function(crust, field, result_crust) {
-    const input = crust.everything;
-    const output = result_crust.everything;
-
-    const length = field.length;
-    for (let i=0, li=input.length; i<li; ++i) {
-        output[i] = input[i] * field[i%length];
+    const input_pools = crust.all_pools;
+    const output_pools = result_crust.all_pools;
+    for (let k=0, lk=input_pools.length; k<lk; ++k) {
+        const input = input_pools[k];
+        const output = output_pools[k];
+        for (let i=0, li=field.length; i<li; ++i) {
+            output[i] = input[i] * field[i];
+        }
     }
 }
 Crust.add_delta = function(crust, crust_delta, result_crust) {
@@ -112,29 +114,45 @@ Crust.add_delta = function(crust, crust_delta, result_crust) {
 Crust.get_average_conserved_per_cell = function(crust, thickness) {  
     return Float32Dataset.sum(crust.conserved_array) / crust.grid.vertices.length
 }
-Crust.get_conserved_mass = function(crust, mass) {  
+// The sums below add pools cell by cell in pool order, rounding to float32 after each addition,
+// exactly like the original raster-wide accumulation, but in a single unrolled pass.
+Crust.get_conserved_mass = function(crust, mass) {
     mass = mass || Float32Raster(crust.grid);
-    mass.fill(0);
-
-    const pools = crust.conserved_array;
-    const length = mass.length;
-    for (let i=0, li=pools.length; i<li; ++i) {
-        mass[i%length] += pools[i];
+    const fround = Math.fround;
+    const sediment = crust.sediment;
+    const sedimentary = crust.sedimentary;
+    const metamorphic = crust.metamorphic;
+    const felsic_plutonic = crust.felsic_plutonic;
+    const felsic_volcanic = crust.felsic_volcanic;
+    for (let i=0, li=mass.length; i<li; ++i) {
+        let sum = fround(0 + sediment[i]);
+        sum = fround(sum + sedimentary[i]);
+        sum = fround(sum + metamorphic[i]);
+        sum = fround(sum + felsic_plutonic[i]);
+        mass[i] = sum + felsic_volcanic[i];
     }
-    
-    return mass; 
+    return mass;
 }
-Crust.get_total_mass = function(crust, mass) {  
+Crust.get_total_mass = function(crust, mass) {
     mass = mass || Float32Raster(crust.grid);
-    mass.fill(0);
-
-    const pools = crust.mass_array;
-    const length = mass.length;
-    for (let i=0, li=pools.length; i<li; ++i) {
-        mass[i%length] += pools[i];
+    const fround = Math.fround;
+    const sediment = crust.sediment;
+    const sedimentary = crust.sedimentary;
+    const metamorphic = crust.metamorphic;
+    const felsic_plutonic = crust.felsic_plutonic;
+    const felsic_volcanic = crust.felsic_volcanic;
+    const mafic_volcanic = crust.mafic_volcanic;
+    const mafic_plutonic = crust.mafic_plutonic;
+    for (let i=0, li=mass.length; i<li; ++i) {
+        let sum = fround(0 + sediment[i]);
+        sum = fround(sum + sedimentary[i]);
+        sum = fround(sum + metamorphic[i]);
+        sum = fround(sum + felsic_plutonic[i]);
+        sum = fround(sum + felsic_volcanic[i]);
+        sum = fround(sum + mafic_volcanic[i]);
+        mass[i] = sum + mafic_plutonic[i];
     }
-    
-    return mass; 
+    return mass;
 }
 Crust.get_density = function(mass, thickness, default_density, density) {
     for (let i = 0, li = density.length; i < li; i++) { 
@@ -257,24 +275,42 @@ Crust.overlap = function(crust1, crust2, crust2_exists, crust2_on_top, result_cr
 Crust.get_thickness = function(crust, material_density, thickness) {
     thickness = thickness || Float32Raster(crust.grid);
 
-    const scratch = Float32Raster(crust.grid);
+    // Mafic rock densifies linearly with age over 250 million years; every other rock type has a fixed density.
+    // This is one fused pass per cell. It rounds to float32 wherever the earlier raster-by-raster version
+    // (linearstep, mix, inv_field, add_field_term, add_scalar_term) stored an intermediate, so results are identical.
+    const fround = Math.fround;
+    const lifetime_start = 0 * Units.MEGAYEAR;
+    const inverse_lifetime = 1 / (250 * Units.MEGAYEAR - lifetime_start);
+    const mafic_density_min = material_density.mafic_volcanic_min;
+    const mafic_density_range = material_density.mafic_volcanic_max - material_density.mafic_volcanic_min;
 
-    const fraction_of_lifetime = scratch;
-    Float32RasterInterpolation.linearstep    (0* Units.MEGAYEAR, 250* Units.MEGAYEAR, crust.age, fraction_of_lifetime);
-    const mafic_density = scratch;
-    Float32RasterInterpolation.mix            (material_density.mafic_volcanic_min, material_density.mafic_volcanic_max, fraction_of_lifetime, mafic_density);
-    const mafic_specific_volume = scratch;
-    ScalarField.inv_field                     (mafic_density, mafic_specific_volume);
-
-    Float32Raster.fill                 (thickness, 0);
-    ScalarField.add_field_term         (thickness, crust.mafic_plutonic, mafic_specific_volume, thickness);
-    ScalarField.add_field_term         (thickness, crust.mafic_volcanic, mafic_specific_volume, thickness);
-
-    const f = ScalarField.add_scalar_term;
-    const crust_pools = crust.conserved_pools;
+    // conserved pools in the order of crust.conserved_pools
     const pool_densities = new RockColumn(material_density).conserved_pools;
-    for (let i = 0, li = crust_pools.length; i < li; ++i) {
-        f(thickness, crust_pools[i], 1/pool_densities[i],  thickness);
+    const sediment_specific_volume        = 1/pool_densities[0];
+    const sedimentary_specific_volume     = 1/pool_densities[1];
+    const metamorphic_specific_volume     = 1/pool_densities[2];
+    const felsic_plutonic_specific_volume = 1/pool_densities[3];
+    const felsic_volcanic_specific_volume = 1/pool_densities[4];
+
+    const age = crust.age;
+    const mafic_plutonic = crust.mafic_plutonic;
+    const mafic_volcanic = crust.mafic_volcanic;
+    const sediment = crust.sediment;
+    const sedimentary = crust.sedimentary;
+    const metamorphic = crust.metamorphic;
+    const felsic_plutonic = crust.felsic_plutonic;
+    const felsic_volcanic = crust.felsic_volcanic;
+    for (let i = 0, li = thickness.length; i < li; ++i) {
+        let fraction_of_lifetime = (age[i] - lifetime_start) * inverse_lifetime;
+        fraction_of_lifetime = fround(fraction_of_lifetime > 1.0? 1.0 : fraction_of_lifetime < 0.0? 0.0 : fraction_of_lifetime);
+        const mafic_specific_volume = fround(1 / fround(mafic_density_min + fraction_of_lifetime * mafic_density_range));
+        let result = fround(0 + mafic_specific_volume * mafic_plutonic[i]);
+        result = fround(result + mafic_specific_volume * mafic_volcanic[i]);
+        result = fround(result + sediment_specific_volume * sediment[i]);
+        result = fround(result + sedimentary_specific_volume * sedimentary[i]);
+        result = fround(result + metamorphic_specific_volume * metamorphic[i]);
+        result = fround(result + felsic_plutonic_specific_volume * felsic_plutonic[i]);
+        thickness[i] = result + felsic_volcanic_specific_volume * felsic_volcanic[i];
     }
 
     return thickness;

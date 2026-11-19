@@ -13,13 +13,31 @@ function Plate(grid, parameters)
     }
     this.global_to_local_matrix = Matrix3x3.invert(this.local_to_global_matrix);
 
+    // "angular_velocity" is an optional Euler vector (radians per second, world frame, counter-clockwise positive).
+    // When it is set, the plate rotates rigidly about that fixed axis instead of using the slab pull estimate.
+    // This is how plates with known present-day motions (e.g. the PB2002 plates of the Earth preset) are driven.
+    this.angular_velocity = void 0;
+    if (parameters['angular_velocity'] !== void 0) {
+        const ω = parameters['angular_velocity'];
+        this.angular_velocity = Vector(ω[0], ω[1], ω[2]);
+    }
+    // optional identifiers for plates that correspond to real ones, e.g. code 'PA', name 'Pacific'
+    this.code = parameters['code'];
+    this.name = parameters['name'];
+
     this.getParameters = function() {
-        return { 
+        const result = {
             //grid:         grid. // TODO: add grid
             crust:             this.crust.buffer.slice(0),
             mask:             this.mask.buffer.slice(0),
             local_to_global_matrix: Array.from(this.local_to_global_matrix)
         };
+        if (this.angular_velocity !== void 0) {
+            result.angular_velocity = [this.angular_velocity.x, this.angular_velocity.y, this.angular_velocity.z];
+        }
+        if (this.code !== void 0) { result.code = this.code; }
+        if (this.name !== void 0) { result.name = this.name; }
+        return result;
     }
 
     const self = this; 
@@ -101,19 +119,10 @@ function Plate(grid, parameters)
         this.center_of_mass.invalidate();
     }
     
-    this.move = function(megayears){
-        assert_dependencies();
-
-        const world = this.world;
-
-        const rotation_matrix = Tectonophysics.get_plate_rotation_matrix3x3(this.velocity.value(), this.center_of_mass.value(), megayears);
-
-        Matrix3x3.mult_matrix(this.local_to_global_matrix, rotation_matrix, this.local_to_global_matrix);
-        Matrix3x3.invert(this.local_to_global_matrix, this.global_to_local_matrix);
-
+    this.update_ids = function() {
         // for each cell in the master's grid, this raster indicates the id of the corresponding cell in the plate's grid
         // this is used to convert between global and local coordinate systems
-        VectorField.mult_matrix(grid.pos, this.global_to_local_matrix, this.local_pos_of_global_cells); 
+        VectorField.mult_matrix(grid.pos, this.global_to_local_matrix, this.local_pos_of_global_cells);
         grid.getNearestIds(this.local_pos_of_global_cells, this.local_ids_of_global_cells);
 
         // for each cell in the plate's grid, this raster indicates the id of the corresponding cell in the world's grid
@@ -121,4 +130,29 @@ function Plate(grid, parameters)
         VectorField.mult_matrix(grid.pos, this.local_to_global_matrix, this.global_pos_of_local_cells);
         grid.getNearestIds(this.global_pos_of_local_cells, this.global_ids_of_local_cells);
     }
+
+    this.move = function(seconds){
+        assert_dependencies();
+
+        const ω = this.angular_velocity;
+        if (ω !== void 0) {
+            // rigid rotation about an axis that is fixed in the world frame, so it is applied on the world side
+            const θ = Math.sqrt(ω.x*ω.x + ω.y*ω.y + ω.z*ω.z) * seconds;
+            if (θ > 0) {
+                const rotation_matrix = Matrix3x3.FromRotationVector(ω.x*seconds, ω.y*seconds, ω.z*seconds);
+                Matrix3x3.mult_matrix(rotation_matrix, this.local_to_global_matrix, this.local_to_global_matrix);
+            }
+        } else {
+            // the slab pull estimate is computed in the plate's own frame, so it is applied on the plate side
+            const rotation_matrix = Tectonophysics.get_plate_rotation_matrix3x3(this.velocity.value(), this.center_of_mass.value(), seconds);
+            Matrix3x3.mult_matrix(this.local_to_global_matrix, rotation_matrix, this.local_to_global_matrix);
+        }
+        Matrix3x3.invert(this.local_to_global_matrix, this.global_to_local_matrix);
+
+        this.update_ids();
+    }
+
+    // Lookups must be valid as soon as the plate exists: the lithosphere merges plates (and integrates deltas
+    // on loaded plates) before the plate's first move(). Left at zero, every cell would map to cell 0 for a frame.
+    this.update_ids();
 }

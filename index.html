@@ -60,6 +60,8 @@
     <script src="noncompiled/models/World.js"></script>
     <script src="noncompiled/models/Simulation.js"></script> 
     <script src="noncompiled/generators/CrustGenerator.js"></script>
+    <script src="noncompiled/generators/EarthData.js"></script>
+    <script src="noncompiled/generators/EarthGenerator.js"></script>
     <script src="noncompiled/generators/NameGenerator.js"></script>
     <script src="noncompiled/generators/NameCorpii.js"></script>
     <script src="noncompiled/file-io/JsonSerializer.js"></script>
@@ -294,6 +296,10 @@
                     <img src="icons/dice-6.svg"/>
                     Randomize
                 </button>
+                <button type="button" class="btn" v-on:click="loadEarth">
+                    <img src="icons/earth.svg"/>
+                    Earth
+                </button>
                 <button type="button" class="btn" v-on:click="copySeed">
                     <img v-if="!isSeedCopied" src="icons/clipboard-arrow-down.svg"/>
                     <img v-if="isSeedCopied" src="icons/clipboard-check.svg"/>
@@ -524,13 +530,24 @@
                 canvas.width  = image.width;
                 canvas.height = image.height;
                 context.drawImage(image,0,0); // Or at whatever offset you like
+                // start a fresh world for the heightmap: existing plates carry their own copies of the old crust
+                // and would overwrite the imported crust on the next update
+                const old_world = sim.focus();
+                const world = replace_world({
+                    id:     old_world.id,
+                    name:   old_world.preset === 'earth'? get_planet_name(sim.random) : old_world.name,
+                    preset: 'imported',
+                    grid:   get_grid_parameters(settingsVue.resolution_level),
+                }, sim.random);
                 // generate crust from canvas context
-                const elevations = ImageImporter.get_elevations_from_canvas_context(context, sim.focus().grid);
+                const elevations = ImageImporter.get_elevations_from_canvas_context(context, world.grid);
                 CrustGenerator.get_crust_from_elevations(
-                    elevations, 
-                    CrustGenerator.modern_earth_attribute_height_maps, 
-                    sim.focus().lithosphere.total_crust
+                    elevations,
+                    CrustGenerator.modern_earth_attribute_height_maps,
+                    world.lithosphere.total_crust
                 );
+                world.lithosphere.initialize();
+                world.invalidate();
 
                 onSimLoadStop.fire();
             };
@@ -538,6 +555,60 @@
         }
         reader.readAsDataURL(file);
     }
+
+    const star_name_corpus = NameGenerator.tokenize_corpus(NameCorpii.arabic_star_names);
+    const get_star_name = NameGenerator.get_length_distribution_generator(star_name_corpus, 25, {5:1,6:3,7:11,8:3,9:1}, 100);
+    const planet_name_corpus = NameGenerator.tokenize_corpus(NameCorpii.greek_mythological_names);
+    const get_planet_name = NameGenerator.get_length_distribution_generator(planet_name_corpus, 25, {5:1,6:3,7:11,8:3,9:1}, 100);
+
+    // grid parameters for an icosahedron subdivided `resolution_level` times
+    function get_grid_parameters(resolution_level) {
+        const geometry = new THREE.IcosahedronGeometry(1, resolution_level);
+        return {
+            faces:    geometry.faces.map(f => { return {a: f.a, b: f.b, c: f.c} }),
+            vertices: geometry.vertices.map(v => { return {x: v.x, y: v.y, z: v.z} }),
+        };
+    }
+    // fills a freshly constructed world with crust (and, for Earth, plates) according to its preset
+    function generate_world(world, random) {
+        if (world.preset === 'earth') {
+            return EarthGenerator.generate(world);
+        }
+        CrustGenerator.get_crust_from_height_ranks(
+            SphericalGeometry.get_random_surface_field(world.grid, random),
+            CrustGenerator.modern_earth_hypsography,
+            CrustGenerator.modern_earth_attribute_height_maps,
+            random,
+            world.lithosphere.total_crust
+        );
+    }
+    // builds a new world on the given grid and swaps it into the running simulation
+    function replace_world(world_parameters, random) {
+        const world = new World(world_parameters);
+        const info = generate_world(world, random);
+        if (!settingsVue.supercontinentBreakup) {
+            world.lithosphere.supercontinentCycle.duration = Infinity;
+        }
+        const universe = sim.model();
+        universe.bodies[world.id] = world;
+        // HACK: we need to call initialize() on universe again because
+        // it's the only thing that passes the dependencies required by world.
+        // TODO: refactor the universe
+        universe.initialize();
+        sim.focus(world);
+        if (world.preset === 'earth') {
+            world.lithosphere.mergePlates();
+            dialogVue.notify(describe_earth(info));
+        }
+        return world;
+    }
+    function describe_earth(info) {
+        const missing = info.total_plate_count - info.plate_count;
+        return missing > 0?
+            `Present-day Earth: ${info.plate_count} of ${info.total_plate_count} plates fit this resolution (raise Resolution for the smallest ${missing})` :
+            `Present-day Earth: all ${info.total_plate_count} plates`;
+    }
+    let initial_notification = "click ▶▶ or press > to begin";
 
     // init the scene
     function init(){
@@ -553,6 +624,8 @@
         
         const resolution_level = Math.min(6, parseInt(querystring['resolution_level'] || '5'));
         autosave_period      = parseInt(querystring['autosave']   || '0');
+        // present-day Earth is the default world; ?world=random starts on a randomly generated planet instead
+        const preset         = querystring['world'] === 'random'? 'random' : 'earth';
 
         view = new View(
             window.innerWidth, 
@@ -569,34 +642,20 @@
             speed: 3.1*Units.DAY,
         });  
 
-        const star_name_corpus = NameGenerator.tokenize_corpus(NameCorpii.arabic_star_names);
-        const get_star_name = NameGenerator.get_length_distribution_generator(star_name_corpus, 25, {5:1,6:3,7:11,8:3,9:1}, 100);
-        
-        const planet_name_corpus = NameGenerator.tokenize_corpus(NameCorpii.greek_mythological_names);
-        const get_planet_name = NameGenerator.get_length_distribution_generator(planet_name_corpus, 25, {5:1,6:3,7:11,8:3,9:1}, 100);
-        const focus_name = get_planet_name(sim.random);
-        
-        const geometry = new THREE.IcosahedronGeometry(1, resolution_level);
         const universe = new Universe({
             bodies: {
                 'star': {
                     type: 'star',
                     id  : 'star',
-                    name: get_star_name(sim.random),
+                    name: preset === 'earth'? 'Sun' : get_star_name(sim.random),
                     mass: Units.SOLAR_MASS,
                 },
                 'world': {
                     type: 'world',
                     id  : 'world',
-                    name: focus_name,
-                    grid: { 
-                        faces:   geometry.faces.map(f => {  
-                            return {a: f.a, b: f.b, c: f.c}  
-                            }), 
-                        vertices:geometry.vertices.map(v => {  
-                            return {x: v.x, y: v.y, z: v.z}  
-                            }), 
-                    }, 
+                    name: preset === 'earth'? 'Earth' : get_planet_name(sim.random),
+                    preset: preset,
+                    grid: get_grid_parameters(resolution_level),
                 },
             },
             config: {
@@ -653,15 +712,13 @@
             },
         });
         const world = universe.bodies['world'];
-        CrustGenerator.get_crust_from_height_ranks(
-            SphericalGeometry.get_random_surface_field(world.grid, sim.random), 
-            CrustGenerator.modern_earth_hypsography, 
-            CrustGenerator.modern_earth_attribute_height_maps, 
-            sim.random,
-            world.lithosphere.total_crust
-        );
+        const info = generate_world(world, sim.random);
         sim.model(universe);
         sim.focus(world);
+        if (preset === 'earth') {
+            world.lithosphere.mergePlates();
+            initial_notification = describe_earth(info) + ". " + initial_notification;
+        }
 
         if (querystring['load']) {
             loadUrl(querystring['load']); // TODO: rework this
@@ -830,9 +887,12 @@
               this.notifications.shift()
               this.notifications.push(notification);
               const _this = this;
-              setInterval(function() {
-                  _this.notifications.shift()
-              }, 3000);
+              // remove this notification once, after a while (a repeating timer here used to pile up and
+              // wipe every later notification within moments)
+              setTimeout(function() {
+                  const i = _this.notifications.indexOf(notification);
+                  if (i >= 0) { _this.notifications.splice(i, 1); }
+              }, 5000);
           }
       }
     });
@@ -934,6 +994,8 @@
                 {    name:'10ky/s',    scale: 1e4*Units.YEAR,  },
                 {    name:'100ky/s',   scale: 1e5*Units.YEAR,  },
                 {    name:'1My/s',     scale: 1e6*Units.YEAR,  },
+                {    name:'5My/s',     scale: 5e6*Units.YEAR,  },
+                {    name:'10My/s',    scale: 1e7*Units.YEAR,  },
             ],
             elapsed_time: 0,
             isSeasonVisible: true,
@@ -1154,7 +1216,8 @@
         supercontinentBreakup : 1,
         seed                  : '',
         isSeedCopied          : 0,
-        resolution_level      : 5,
+        // start the slider where init() reads it from, so it reflects ?resolution_level= without triggering a rebuild
+        resolution_level      : Math.min(6, parseInt(new URLSearchParams(window.location.search).get('resolution_level') || '5')),
         cell_count            : 0,
         axial_tilt_degrees    : 23.5,
         log10_day_length      : Math.log10(Units.DAY),
@@ -1186,39 +1249,21 @@
         },
         'resolution_level': function(new_value, old_value) {
             onSimLoadStart.fire();
-            // preserve the same exact state of world in every way except grid
-            const world_params = sim.focus().getParameters();
-            const geometry = new THREE.IcosahedronGeometry(1, new_value);
-            world_params.grid = { 
-                    faces:   geometry.faces.map(f => {  
-                        return {a: f.a, b: f.b, c: f.c}  
-                        }), 
-                    vertices:geometry.vertices.map(v => {  
-                        return {x: v.x, y: v.y, z: v.z}  
-                        }), 
-                };
-            // eliminate anything that would store a raster in a buffer to prevent overflow
-            world_params.lithosphere.plates = [];
-            world_params.lithosphere.total_crust = undefined;
-            const world = new World(world_params);
-            CrustGenerator.get_crust_from_height_ranks(
-                SphericalGeometry.get_random_surface_field(world.grid, sim.random), 
-                CrustGenerator.modern_earth_hypsography, 
-                CrustGenerator.modern_earth_attribute_height_maps, 
-                sim.random,
-                world.lithosphere.total_crust
-            );
-            
-            const universe = sim.model();
-            universe.bodies[world.id] = world;
-            // HACK: we need to call initialize() on universe again because 
-            // it's the only thing that passes the dependencies required by world.
-            // This is a huge pain in the ass and this is the exact reason why
-            //   you shouldn't play with stateful objects, kids. 
-            // TODO: refactor the universe
-            universe.initialize();
-            sim.focus(world);
-
+            const old_world = sim.focus();
+            if (old_world.preset === 'earth') {
+                // present-day Earth is rebuilt from its source data on the new grid
+                replace_world({ id: old_world.id, name: old_world.name, preset: 'earth', grid: get_grid_parameters(new_value) }, sim.random);
+            } else {
+                // preserve the same exact state of world in every way except grid
+                const world_params = old_world.getParameters();
+                world_params.grid = get_grid_parameters(new_value);
+                // eliminate anything that would store a raster in a buffer to prevent overflow
+                world_params.lithosphere.plates = [];
+                world_params.lithosphere.total_crust = undefined;
+                // with no plates left, start a fresh supercontinent cycle so plates are segmented on the first update
+                world_params.lithosphere.supercontinent_cycle = undefined;
+                replace_world(world_params, sim.random);
+            }
             onSimLoadStop.fire();
         }
       },
@@ -1238,14 +1283,20 @@
             }
         },
         randomizeCrust: function() {
-            const world = sim.focus();
-            CrustGenerator.get_crust_from_height_ranks(
-                SphericalGeometry.get_random_surface_field(world.grid, sim.random), 
-                CrustGenerator.modern_earth_hypsography, 
-                CrustGenerator.modern_earth_attribute_height_maps, 
-                sim.random,
-                world.lithosphere.total_crust
-            );
+            // A whole new world is built: rewriting the old world's crust alone was overwritten
+            // by its existing plates on the next update, so the randomization never stuck.
+            onSimLoadStart.fire();
+            const old_world = sim.focus();
+            replace_world({ id: old_world.id, name: get_planet_name(sim.random), preset: 'random', grid: get_grid_parameters(this.resolution_level) }, sim.random);
+            sim.elapsed_time = 0;
+            onSimLoadStop.fire();
+        },
+        loadEarth: function() {
+            onSimLoadStart.fire();
+            const old_world = sim.focus();
+            replace_world({ id: old_world.id, name: 'Earth', preset: 'earth', grid: get_grid_parameters(this.resolution_level) }, sim.random);
+            sim.elapsed_time = 0;
+            onSimLoadStop.fire();
         },
         copySeed: function() {
             const copyText = document.getElementById("seed");
@@ -1316,7 +1367,7 @@
     timeMenuVue.speed(1)
 
     // once everything is loaded, instruct the user how to start
-    dialogVue.notify("click ▶▶ or press > to begin")
+    dialogVue.notify(initial_notification)
 </script>
 </body>
 </html>

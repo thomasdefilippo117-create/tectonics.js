@@ -65,13 +65,11 @@ function Simulation (parameters) {
 
     this.update = function() {
         const now = performance.now();
-        const seconds = (now - this._last_update_timestamp)/1000;
+        // limit each step to what a 5fps frame would advance. Steps are clamped rather than skipped: skipping
+        // made slow updates (big grids, many plates) alternate between a skipped frame and a nearly empty one,
+        // so the simulation barely advanced. Clamping also covers long gaps such as a backgrounded tab.
+        const seconds = Math.min((now - this._last_update_timestamp)/1000, 1/5);
         this._last_update_timestamp = now;
-
-        //minimum refresh rate of 5fps
-        if (seconds > 1/5){
-            return;
-        }
 
         if (this.paused){
             return;

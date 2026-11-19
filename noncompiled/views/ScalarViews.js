@@ -19,9 +19,40 @@ scalarViews.topographic    = new ScalarWorldView(
         new TopographicRasterView( { scaling: true }),
         world => world.hydrosphere.elevation.value()
     );
-scalarViews.plates     = new ScalarWorldView( 
-        new HeatmapRasterView( { min: 0., max: 7. }),
-        world => world.lithosphere.top_plate_map
+scalarViews.plates     = new ScalarWorldView(
+        new HeatmapRasterView( { min: 0., max: 1. }),
+        (world, result) => {
+            // A color per plate index cannot keep dozens of plates (Earth has 52) apart, so plates are colored
+            // like a political map: each takes the first palette color none of its neighbors use (greedy coloring,
+            // in plate order so colors stay put from frame to frame).
+            const palette = [0.15, 0.55, 0.85, 0.35, 1.0, 0.7, 0.25, 0.45, 0.95, 0.6];
+            const ids = world.lithosphere.top_plate_map;
+            const neighbor_lookup = world.grid.neighbor_lookup;
+            const plate_count = world.lithosphere.plates.length;
+            const neighbors = [];
+            for (let p = 0; p < plate_count; p++) { neighbors.push(new Set()); }
+            for (let i = 0, li = ids.length; i < li; i++) {
+                const a = ids[i];
+                if (a >= plate_count) { continue; }
+                const cell_neighbors = neighbor_lookup[i];
+                for (let j = 0, lj = cell_neighbors.length; j < lj; j++) {
+                    const b = ids[cell_neighbors[j]];
+                    if (b !== a && b < plate_count) { neighbors[a].add(b); }
+                }
+            }
+            const color = new Int8Array(plate_count).fill(-1);
+            for (let p = 0; p < plate_count; p++) {
+                const taken = new Set();
+                neighbors[p].forEach(q => { if (color[q] >= 0) { taken.add(color[q]); } });
+                let c = 0;
+                while (taken.has(c) && c < palette.length - 1) { c++; }
+                color[p] = c;
+            }
+            for (let i = 0, li = ids.length; i < li; i++) {
+                result[i] = ids[i] < plate_count? palette[color[ids[i]]] : 0;
+            }
+            return result;
+        }
     );
 scalarViews.plate_count     = new ScalarWorldView( 
         new HeatmapRasterView( { min: 0., max: 3. }),

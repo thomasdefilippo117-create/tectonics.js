@@ -9,17 +9,18 @@ function IntegerLattice(points, getDistance, farthest_nearest_neighbor_distance)
     var max_x = Math.max.apply(null, points.map(point => point.x));
     var min_x = Math.min.apply(null, points.map(point => point.x));
     var range_x = max_x - min_x;
-    var cell_num_x = range_x / cell_width;
+    // cell counts must be integers (with room for the +1 neighbors below), or distinct cells can share an id
+    var cell_num_x = Math.ceil(range_x / cell_width) + 2;
 
     var max_y = Math.max.apply(null, points.map(point => point.y));
     var min_y = Math.min.apply(null, points.map(point => point.y));
     var range_y = max_y - min_y;
-    var cell_num_y = range_y / cell_width;
+    var cell_num_y = Math.ceil(range_y / cell_width) + 2;
 
     var max_z = Math.max.apply(null, points.map(point => point.z));
     var min_z = Math.min.apply(null, points.map(point => point.z));
     var range_z = max_z - min_z;
-    var cell_num_z = range_z / cell_width;
+    var cell_num_z = Math.ceil(range_z / cell_width) + 2;
 
     var ceil = Math.ceil;
     var round = Math.round;
@@ -43,11 +44,13 @@ function IntegerLattice(points, getDistance, farthest_nearest_neighbor_distance)
         xi = round((point.x - min_x) / cell_width);
         yi = round((point.y - min_y) / cell_width);
         zi = round((point.z - min_z) / cell_width);
+        // register the point in all 8 cells whose lookups it can be nearest to
         add(cell_id(xi, yi, zi),         point);
         add(cell_id(xi+1, yi, zi),         point);
         add(cell_id(xi, yi+1, zi),         point);
         add(cell_id(xi, yi, zi+1),         point);
         add(cell_id(xi+1, yi+1, zi),     point);
+        add(cell_id(xi+1, yi, zi+1),     point);
         add(cell_id(xi, yi+1, zi+1),     point);
         add(cell_id(xi+1, yi+1, zi+1),     point);
     } 

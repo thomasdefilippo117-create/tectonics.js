@@ -8,8 +8,13 @@ function SupercontinentCycle(lithosphere, parameters){
         // from wikipedia
     
     this.lithosphere = lithosphere;
-    this.duration = parameters['duration'] || this.getRandomDuration();
-    this.age = parameters['age'] || this.duration;
+    // NOTE: saves store Infinity (breakup disabled) as null, since JSON has no Infinity
+    // NOTE: an age of 0 is meaningful (a cycle that just started), so test for presence instead of truthiness
+    this.duration = parameters['duration'] === null? Infinity
+        : parameters['duration'] !== void 0? parameters['duration']
+        : this.getRandomDuration();
+    // without a saved age the cycle starts out ended, so plates are segmented on the first update
+    this.age = typeof parameters['age'] === 'number'? parameters['age'] : this.duration;
 
     this.getParameters = function() {
         return { 

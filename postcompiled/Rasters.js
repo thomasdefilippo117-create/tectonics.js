@@ -3531,6 +3531,8 @@ VectorField.dot_vector_field = function(vector_field1, vector_field2, result) {
    
     var u = vector_field1.everything;
     var v = vector_field2.everything;
+    // the loop accumulates, so the result must start at zero (callers often pass reused scratch rasters)
+    result.fill(0);
     var length = result.length;
     for (var i=0, li=u.length; i<li; ++i) {
         result[i%length] += u[i] * v[i];
@@ -4736,15 +4738,16 @@ function IntegerLattice(points, getDistance, farthest_nearest_neighbor_distance)
     var max_x = Math.max.apply(null, points.map(point => point.x));
     var min_x = Math.min.apply(null, points.map(point => point.x));
     var range_x = max_x - min_x;
-    var cell_num_x = range_x / cell_width;
+    // cell counts must be integers (with room for the +1 neighbors below), or distinct cells can share an id
+    var cell_num_x = Math.ceil(range_x / cell_width) + 2;
     var max_y = Math.max.apply(null, points.map(point => point.y));
     var min_y = Math.min.apply(null, points.map(point => point.y));
     var range_y = max_y - min_y;
-    var cell_num_y = range_y / cell_width;
+    var cell_num_y = Math.ceil(range_y / cell_width) + 2;
     var max_z = Math.max.apply(null, points.map(point => point.z));
     var min_z = Math.min.apply(null, points.map(point => point.z));
     var range_z = max_z - min_z;
-    var cell_num_z = range_z / cell_width;
+    var cell_num_z = Math.ceil(range_z / cell_width) + 2;
     var ceil = Math.ceil;
     var round = Math.round;
     function cell_id(xi, yi, zi) {
@@ -4765,11 +4768,13 @@ function IntegerLattice(points, getDistance, farthest_nearest_neighbor_distance)
         xi = round((point.x - min_x) / cell_width);
         yi = round((point.y - min_y) / cell_width);
         zi = round((point.z - min_z) / cell_width);
+        // register the point in all 8 cells whose lookups it can be nearest to
         add(cell_id(xi, yi, zi), point);
         add(cell_id(xi+1, yi, zi), point);
         add(cell_id(xi, yi+1, zi), point);
         add(cell_id(xi, yi, zi+1), point);
         add(cell_id(xi+1, yi+1, zi), point);
+        add(cell_id(xi+1, yi, zi+1), point);
         add(cell_id(xi, yi+1, zi+1), point);
         add(cell_id(xi+1, yi+1, zi+1), point);
     }
@@ -4815,6 +4820,17 @@ var VoronoiSphere = (function() {
     var OCTAHEDRON_SIDE_X = VectorRaster.ToArray(OCTAHEDRON_SIDE_X);
     var OCTAHEDRON_SIDE_Y = VectorRaster.ToArray(OCTAHEDRON_SIDE_Y);
     var OCTAHEDRON_SIDE_Z = VectorRaster.ToArray(OCTAHEDRON_SIDE_Z);
+    // flat copies of the side axes so lookups avoid object property access and function calls
+    var OCTAHEDRON_SIDE_X_FLAT = new Float64Array(OCTAHEDRON_SIDE_COUNT * 3);
+    var OCTAHEDRON_SIDE_Y_FLAT = new Float64Array(OCTAHEDRON_SIDE_COUNT * 3);
+    for (var side = 0; side < OCTAHEDRON_SIDE_COUNT; side++) {
+        OCTAHEDRON_SIDE_X_FLAT[3*side+0] = OCTAHEDRON_SIDE_X[side].x;
+        OCTAHEDRON_SIDE_X_FLAT[3*side+1] = OCTAHEDRON_SIDE_X[side].y;
+        OCTAHEDRON_SIDE_X_FLAT[3*side+2] = OCTAHEDRON_SIDE_X[side].z;
+        OCTAHEDRON_SIDE_Y_FLAT[3*side+0] = OCTAHEDRON_SIDE_Y[side].x;
+        OCTAHEDRON_SIDE_Y_FLAT[3*side+1] = OCTAHEDRON_SIDE_Y[side].y;
+        OCTAHEDRON_SIDE_Y_FLAT[3*side+2] = OCTAHEDRON_SIDE_Y[side].z;
+    }
     var cell_count = function (dimensions_x, dimensions_y){
         return OCTAHEDRON_SIDE_COUNT * dimensions_x * dimensions_y;
     }
@@ -4868,8 +4884,9 @@ var VoronoiSphere = (function() {
                 for (var yi2d = 0; yi2d < dimension_y; yi2d++)
                 {
                     // get position of the cell that's projected onto the 2d grid
-                    x2d = xi2d * cell_width - 1.;
-                    y2d = yi2d * cell_width - 1.;
+                    // lookups floor() into a cell, so the cell is represented by its center, not its corner
+                    x2d = (xi2d + 0.5) * cell_width - 1.;
+                    y2d = (yi2d + 0.5) * cell_width - 1.;
                     // reconstruct the dimension omitted from the grid using pythagorean theorem
                     z2d = sqrt(max(1. - (x2d*x2d) - (y2d*y2d), 0.));
                     Vector.mult_scalar(side_x.x, side_x.y, side_x.z, x2d, cell_x);
@@ -4889,38 +4906,39 @@ var VoronoiSphere = (function() {
     }
     VoronoiSphere.prototype.getNearestIds = function(pos_field, result) {
         result = result || new Uint16Array(pos_field.x.length);
+
         var cell_width = this.cell_width;
-        var dimension_x = this.dimension_x;
         var dimension_y = this.dimension_y;
+        var side_size = this.dimension_x * this.dimension_y;
         var cells = this.cells;
-        var side_x = OCTAHEDRON_SIDE_X[0];
-        var side_y = OCTAHEDRON_SIDE_Y[0];
-        var projection_x = 0;
-        var projection_y = 0;
-        var grid_pos_x = 0;
-        var grid_pos_y = 0;
-        var pos_field_xi = 0;
-        var pos_field_yi = 0;
-        var pos_field_zi = 0;
-        var side_id = 0;
-        var dot = Vector.dot_vector;
+
+        var side_x = OCTAHEDRON_SIDE_X_FLAT;
+        var side_y = OCTAHEDRON_SIDE_Y_FLAT;
+        var pos_x = pos_field.x;
+        var pos_y = pos_field.y;
+        var pos_z = pos_field.z;
         var floor = Math.floor;
-        for (var i = 0, li = pos_field.x.length; i < li; i++)
+
+        // same arithmetic as Vector.dot_vector() and cell_id(), inlined: this runs twice per plate every frame
+        for (var i = 0, li = pos_x.length; i < li; i++)
         {
-            pos_field_xi = pos_field.x[i];
-            pos_field_yi = pos_field.y[i];
-            pos_field_zi = pos_field.z[i];
+            var xi = pos_x[i];
+            var yi = pos_y[i];
+            var zi = pos_z[i];
+
             var side_id =
-              (( pos_field_xi > 0) ) +
-              (( pos_field_yi > 0) << 1) +
-              (( pos_field_zi > 0) << 2) ;
-            side_x = OCTAHEDRON_SIDE_X[side_id];
-            side_y = OCTAHEDRON_SIDE_Y[side_id];
-            projection_x = dot( side_x.x, side_x.y, side_x.z, pos_field_xi, pos_field_yi, pos_field_zi );
-            projection_y = dot( side_y.x, side_y.y, side_y.z, pos_field_xi, pos_field_yi, pos_field_zi );
-            grid_pos_x = floor((projection_x + 1.) / cell_width);
-            grid_pos_y = floor((projection_y + 1.) / cell_width);
-            result[i] = cells[cell_id(side_id, grid_pos_x, grid_pos_y, dimension_x, dimension_y)];
+              (( xi > 0)     ) +
+              (( yi > 0) << 1) +
+              (( zi > 0) << 2) ;
+            var s = 3 * side_id;
+
+            var projection_x = (side_x[s] * xi + side_x[s+1] * yi + side_x[s+2] * zi);
+            var projection_y = (side_y[s] * xi + side_y[s+1] * yi + side_y[s+2] * zi);
+
+            var grid_pos_x = floor((projection_x + 1.) / cell_width);
+            var grid_pos_y = floor((projection_y + 1.) / cell_width);
+
+            result[i] = cells[side_id * side_size + grid_pos_x * dimension_y + grid_pos_y];
         }
         return result;
     }

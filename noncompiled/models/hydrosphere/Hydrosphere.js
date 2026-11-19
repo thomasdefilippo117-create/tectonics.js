@@ -7,14 +7,16 @@ function Hydrosphere(grid, parameters) {
     this.average_ocean_depth = parameters['average_ocean_depth'] || 2000; // meters, conserved quantity
 
     // public variables
-    const _this = this; 
+    const _this = this;
+    const sealevel_scratch = Float32Raster(grid); // reused by the sea level solver instead of allocating every frame
     this.sealevel = new Memo( 0,
         current_value => 
             Hydrology.solve_sealevel(
                 displacement.value(), 
                 _this.average_ocean_depth, 
-                material_density.ocean, 
-                // Float32Raster(grid) 
+                material_density.ocean,
+                sealevel_scratch,
+                20, // bisection steps: ~1cm precision for Earth-like relief (the default of 10 gives ~10m)
             ),
         true,
     ); 

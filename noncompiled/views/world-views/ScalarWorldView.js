@@ -10,20 +10,26 @@ function ScalarWorldView(scalarRasterView, getField) {
     this.clone = function() {
         return new ScalarWorldView(scalarRasterView.clone(), getField);
     }
+    // (re)allocate scratch rasters whenever the world's grid changes, e.g. after a resolution change or a new world
+    function allocate(world) {
+        if (preallocated === void 0 || preallocated.grid !== world.grid) {
+            preallocated = Float32Raster(world.grid);
+            scratch = Float32Raster(world.grid);
+        }
+    }
     this.updateChart = function(data, world, options) {
 
         // run getField()
         if (this.getField === void 0) {
             log_once("ScalarWorldView.getField is undefined.");
-            this.removeFromScene(gl_state);
             return;
         }
 
-        const raster = this.getField(world, preallocated, scratch, options);
+        allocate(world);
+        let raster = this.getField(world, preallocated, scratch, options);
 
         if (raster === void 0) {
             log_once("ScalarWorldView.getField() returned undefined.");
-            this.removeFromScene(gl_state);
             return;
         }
         if (raster instanceof Uint8Array) {
@@ -32,9 +38,8 @@ function ScalarWorldView(scalarRasterView, getField) {
         if (raster instanceof Uint16Array) {
             raster = Float32Raster.FromUint16Raster(raster);
         }
-        if (!(raster instanceof Float32Array)) { 
+        if (!(raster instanceof Float32Array)) {
             log_once("ScalarWorldView.getField() did not return a TypedArray.");
-            this.removeFromScene(gl_state);
             return;
         }
 
@@ -42,8 +47,7 @@ function ScalarWorldView(scalarRasterView, getField) {
     };
     this.updateScene = function(gl_state, world, options) {
 
-        preallocated = preallocated || Float32Raster(world.grid);
-        scratch = scratch || Float32Raster(world.grid);
+        allocate(world);
 
         // run getField()
         if (this.getField === void 0) {
@@ -52,7 +56,7 @@ function ScalarWorldView(scalarRasterView, getField) {
             return;
         }
 
-        const raster = this.getField(world, preallocated, scratch, options);
+        let raster = this.getField(world, preallocated, scratch, options);
 
         if (raster === void 0) {
             log_once("ScalarWorldView.getField() returned undefined.");

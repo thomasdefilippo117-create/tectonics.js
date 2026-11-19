@@ -10,7 +10,7 @@ const RockColumn = (function() {
         this.felsic_plutonic = optional['felsic_plutonic'] || 0;
         this.felsic_volcanic = optional['felsic_volcanic'] || 0;
         this.mafic_volcanic = optional['mafic_volcanic'] || 0;
-        this.mafic_plutonic = optional['mafic_volcanic'] || 0;
+        this.mafic_plutonic = optional['mafic_plutonic'] || 0;
         this.age = optional['age'] || 0;
 
 
