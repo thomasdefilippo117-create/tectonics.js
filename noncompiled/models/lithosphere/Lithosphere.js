@@ -105,6 +105,7 @@ function Lithosphere(grid, parameters) {
     // several whole-world raster passes per plate. With dozens of plates (e.g. Earth's 52) that was the main cost.
     // Every function reproduces the original raster-based implementation exactly, including float32 rounding,
     // except for the gap filling at the end of update_rifting(), which is new.
+    // Sparse plates (prescribed motion, see Plate) are processed on their own cell lists only.
     const cell_count = grid.vertices.length;
     const neighbor_lookup = grid.neighbor_lookup;
     const master_density = Float32Raster(grid);
@@ -115,6 +116,13 @@ function Lithosphere(grid, parameters) {
     const is_subducted_scratch = new Uint8Array(cell_count);
     const accretion_scratch = new Float32Array(cell_count);
     const selected_cells = new Uint32Array(cell_count);
+    // plates that use every cell iterate this identity list; sparse plates (see Plate) iterate their own lists
+    const all_cells = new Uint32Array(cell_count);
+    for (let i = 0; i < cell_count; i++) { all_cells[i] = i; }
+    function get_covered_cells(plate) { return plate.covered_count >= 0? plate.covered_cells : all_cells; }
+    function get_covered_count(plate) { return plate.covered_count >= 0? plate.covered_count : cell_count; }
+    function get_active_cells(plate)  { return plate.active_count  >= 0? plate.active_cells  : all_cells; }
+    function get_active_count(plate)  { return plate.active_count  >= 0? plate.active_count  : cell_count; }
     function next_visit_stamp() {
         visit_stamp++;
         if (visit_stamp === 0xFFFFFFFF) { visit_stamps.fill(0); visit_stamp = 1; }
@@ -153,8 +161,11 @@ function Lithosphere(grid, parameters) {
             const mafic_volcanic = plate.crust.mafic_volcanic;
             const mafic_plutonic = plate.crust.mafic_plutonic;
             const age = plate.crust.age;
+            const covered_cells = get_covered_cells(plate);
+            const covered_count = get_covered_count(plate);
 
-            for (let g = 0; g < cell_count; g++) {
+            for (let c = 0; c < covered_count; c++) {
+                const g = covered_cells[c];
                 const l = local_ids_of_global_cells[g];
                 if (mask[l] !== 1) { continue; }
 
@@ -204,8 +215,11 @@ function Lithosphere(grid, parameters) {
 
             // candidates are the cells just outside the border: not in the mask, but next to it
             const stamp = next_visit_stamp();
+            const active_cells = get_active_cells(plate);
+            const active_count = get_active_count(plate);
             let rifting_count = 0;
-            for (let l = 0; l < cell_count; l++) {
+            for (let a = 0; a < active_count; a++) {
+                const l = active_cells[a];
                 if (mask[l] !== 1) { continue; }
                 const neighbors = neighbor_lookup[l];
                 for (let j = 0, lj = neighbors.length; j < lj; j++) {
@@ -261,6 +275,13 @@ function Lithosphere(grid, parameters) {
             const plate = plates[best];
             const l = plate.local_ids_of_global_cells[g];
             if (plate.mask[l] === 1) { continue; }
+            // the new cell must touch the plate locally, as new crust grows from the plate's edge
+            const local_neighbors = neighbor_lookup[l];
+            let touches_plate = false;
+            for (let j = 0, lj = local_neighbors.length; j < lj; j++) {
+                if (plate.mask[local_neighbors[j]] === 1) { touches_plate = true; break; }
+            }
+            if (!touches_plate) { continue; }
             plate.mask[l] = 1;
             const pools = plate.crust.all_pools;
             for (let k = 0; k < pool_count; k++) {
@@ -301,8 +322,12 @@ function Lithosphere(grid, parameters) {
             // detect subduction: is_subducted: count > 1 and top_plate != i
             // WARNING: unfortunate side effect!
             // we metamorphose stuff here because trying to do it using deltas was causing problems with conservation
-            // (every local cell is processed, as before, since cells outside the mask still feed plate velocity estimates)
-            for (let l = 0; l < cell_count; l++) {
+            // (plates without a prescribed motion process every local cell, as before, since cells outside the mask
+            //  still feed their velocity estimates; sparse plates only need their active cells)
+            const active_cells = get_active_cells(plate);
+            const active_count = get_active_count(plate);
+            for (let a = 0; a < active_count; a++) {
+                const l = active_cells[a];
                 const g = global_ids_of_local_cells[l];
                 const subducted = plate_count[g] !== 1 && top_plate_map[g] !== i;
                 is_subducted[l] = subducted? 1 : 0;
@@ -322,7 +347,8 @@ function Lithosphere(grid, parameters) {
             // NOTE: density is the value memoized before metamorphosis, exactly as before
             const density = plate.density.value();
             let detaching_count = 0;
-            for (let l = 0; l < cell_count; l++) {
+            for (let a = 0; a < active_count; a++) {
+                const l = active_cells[a];
                 if (mask[l] !== 1 || is_subducted[l] !== 1 || !(density[l] > mantle_density)) { continue; }
                 const neighbors = neighbor_lookup[l];
                 let is_just_inside_border = false;
@@ -350,7 +376,10 @@ function Lithosphere(grid, parameters) {
                 visit_stamps[l] = stamp;
             }
             // every world cell that maps onto a detaching cell receives its mass
-            for (let g = 0; g < cell_count; g++) {
+            const covered_cells = get_covered_cells(plate);
+            const covered_count = get_covered_count(plate);
+            for (let c = 0; c < covered_count; c++) {
+                const g = covered_cells[c];
                 const l = local_ids_of_global_cells[g];
                 if (visit_stamps[l] !== stamp) { continue; }
                 accretion_felsic_plutonic[g] = accretion_felsic_plutonic[g] + accretion_scratch[l] * 0.85;
@@ -425,7 +454,18 @@ function Lithosphere(grid, parameters) {
         // These fields are very important since they are used to derive the motions and borders of the plates.
         // To get around this, we give the age field special treatment, and simply increment its values everywhere by the same timestep.
         for (let i = 0; i < plate_count; i++) {
-            ScalarField.add_scalar(plates[i].crust.age, seconds, plates[i].crust.age);
+            const plate = plates[i];
+            if (plate.active_count < 0) {
+                ScalarField.add_scalar(plate.crust.age, seconds, plate.crust.age);
+                continue;
+            }
+            // sparse plates: nothing reads age outside the active cells, and cells only join a plate by being
+            // overwritten with new crust
+            const age = plate.crust.age;
+            const active_cells = plate.active_cells;
+            for (let a = 0, la = plate.active_count; a < la; a++) {
+                age[active_cells[a]] += seconds;
+            }
         }
     }
 

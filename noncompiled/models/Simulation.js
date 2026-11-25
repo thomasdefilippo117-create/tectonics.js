@@ -63,9 +63,16 @@ function Simulation (parameters) {
         };
     }
 
+    // The longest step the model takes at once. Longer steps let plates jump several cells, opening gaps and
+    // overlaps the lithosphere cannot resolve, so faster speeds are reached with several steps per frame.
+    this.max_timestep = 2 * Units.MEGAYEAR;
+    // Milliseconds a frame may spend on extra steps. Past that, the rest of the frame's simulated time is dropped:
+    // the simulation runs slower than the chosen speed instead of freezing the page.
+    this.frame_budget = 100;
+
     this.update = function() {
         const now = performance.now();
-        // limit each step to what a 5fps frame would advance. Steps are clamped rather than skipped: skipping
+        // limit each frame to what a 5fps frame would advance. Frames are clamped rather than skipped: skipping
         // made slow updates (big grids, many plates) alternate between a skipped frame and a nearly empty one,
         // so the simulation barely advanced. Clamping also covers long gaps such as a backgrounded tab.
         const seconds = Math.min((now - this._last_update_timestamp)/1000, 1/5);
@@ -79,13 +86,18 @@ function Simulation (parameters) {
             return;
         }
 
-        this.elapsed_time += this.speed * seconds;
-
-        const timestep = this.speed * seconds;
-
-        _model.invalidate(timestep);
-        _model.calcChanges(timestep);
-        _model.applyChanges(timestep);
+        const frame_time = this.speed * seconds;
+        const step_count = Math.max(1, Math.ceil(frame_time / this.max_timestep));
+        const timestep = frame_time / step_count;
+        for (let i = 0; i < step_count; i++) {
+            this.elapsed_time += timestep;
+            _model.invalidate(timestep);
+            _model.calcChanges(timestep);
+            _model.applyChanges(timestep);
+            if (performance.now() - now > this.frame_budget) {
+                break;
+            }
+        }
     };
 
     this.toggle_pause = function () {

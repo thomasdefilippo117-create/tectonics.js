@@ -316,6 +316,59 @@ Crust.get_thickness = function(crust, material_density, thickness) {
     return thickness;
 }
 
+// Density of the listed cells only, identical (float32 rounding included) to
+//   Crust.get_density(Crust.get_total_mass(crust), Crust.get_thickness(crust, material_density), material_density.mafic_volcanic_min)
+// Other cells of the result are left untouched.
+Crust.get_density_of_cells = function(crust, material_density, cells, cell_count, density) {
+    const fround = Math.fround;
+    const lifetime_start = 0 * Units.MEGAYEAR;
+    const inverse_lifetime = 1 / (250 * Units.MEGAYEAR - lifetime_start);
+    const mafic_density_min = material_density.mafic_volcanic_min;
+    const mafic_density_range = material_density.mafic_volcanic_max - material_density.mafic_volcanic_min;
+    const default_density = material_density.mafic_volcanic_min;
+
+    const pool_densities = new RockColumn(material_density).conserved_pools;
+    const sediment_specific_volume        = 1/pool_densities[0];
+    const sedimentary_specific_volume     = 1/pool_densities[1];
+    const metamorphic_specific_volume     = 1/pool_densities[2];
+    const felsic_plutonic_specific_volume = 1/pool_densities[3];
+    const felsic_volcanic_specific_volume = 1/pool_densities[4];
+
+    const age = crust.age;
+    const mafic_plutonic = crust.mafic_plutonic;
+    const mafic_volcanic = crust.mafic_volcanic;
+    const sediment = crust.sediment;
+    const sedimentary = crust.sedimentary;
+    const metamorphic = crust.metamorphic;
+    const felsic_plutonic = crust.felsic_plutonic;
+    const felsic_volcanic = crust.felsic_volcanic;
+    for (let c = 0; c < cell_count; ++c) {
+        const i = cells[c];
+        // thickness, as in Crust.get_thickness()
+        let fraction_of_lifetime = (age[i] - lifetime_start) * inverse_lifetime;
+        fraction_of_lifetime = fround(fraction_of_lifetime > 1.0? 1.0 : fraction_of_lifetime < 0.0? 0.0 : fraction_of_lifetime);
+        const mafic_specific_volume = fround(1 / fround(mafic_density_min + fraction_of_lifetime * mafic_density_range));
+        let thickness = fround(0 + mafic_specific_volume * mafic_plutonic[i]);
+        thickness = fround(thickness + mafic_specific_volume * mafic_volcanic[i]);
+        thickness = fround(thickness + sediment_specific_volume * sediment[i]);
+        thickness = fround(thickness + sedimentary_specific_volume * sedimentary[i]);
+        thickness = fround(thickness + metamorphic_specific_volume * metamorphic[i]);
+        thickness = fround(thickness + felsic_plutonic_specific_volume * felsic_plutonic[i]);
+        thickness = fround(thickness + felsic_volcanic_specific_volume * felsic_volcanic[i]);
+        // mass, as in Crust.get_total_mass()
+        let mass = fround(0 + sediment[i]);
+        mass = fround(mass + sedimentary[i]);
+        mass = fround(mass + metamorphic[i]);
+        mass = fround(mass + felsic_plutonic[i]);
+        mass = fround(mass + felsic_volcanic[i]);
+        mass = fround(mass + mafic_volcanic[i]);
+        mass = fround(mass + mafic_plutonic[i]);
+        // density, as in Crust.get_density()
+        density[i] = thickness > 0? mass / thickness : default_density;
+    }
+    return density;
+}
+
 // returns net buoyancy force, in Newtons
 // buoyancy is a scalar indicating force applied along the height axis
 // positive buoyancy indicates floating, negative buoyancy indicates sinking
