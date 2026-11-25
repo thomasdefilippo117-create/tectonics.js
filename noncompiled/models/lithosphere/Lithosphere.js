@@ -78,6 +78,30 @@ function Lithosphere(grid, parameters) {
     this.plate_count         = Uint8Raster(grid);
     this.asthenosphere_velocity = VectorRaster(grid);
 
+    // surface velocity of the plate seen from space at each cell, ω × r, in radians per second on the unit sphere
+    // (multiply by the planet's radius for meters per second). Used by the plate motion arrows.
+    this.plate_velocity = new Memo(
+        void 0,
+        result => {
+            result = result || VectorRaster(grid);
+            const plates = self.plates;
+            const top_plate_map = self.top_plate_map;
+            const x = grid.pos.x, y = grid.pos.y, z = grid.pos.z;
+            for (let i = 0, li = top_plate_map.length; i < li; i++) {
+                const p = top_plate_map[i];
+                if (p >= plates.length) {
+                    result.x[i] = 0; result.y[i] = 0; result.z[i] = 0;
+                    continue;
+                }
+                const ω = plates[p].world_angular_velocity;
+                result.x[i] = ω.y * z[i] - ω.z * y[i];
+                result.y[i] = ω.z * x[i] - ω.x * z[i];
+                result.z[i] = ω.x * y[i] - ω.y * x[i];
+            }
+            return result;
+        }
+    );
+
     this.total_crust     = new Crust({grid: grid, buffer: parameters['total_crust']});
     this.top_crust         = new Crust({grid: grid});
     this.erosion         = new Crust({grid: grid});
@@ -539,6 +563,7 @@ function Lithosphere(grid, parameters) {
         this.total_mass    .invalidate();
         this.density    .invalidate();
         this.buoyancy    .invalidate();
+        this.plate_velocity.invalidate();
         const plates = this.plates;
         for (let i=0, li=plates.length; i<li; ++i) {
             plates[i]    .invalidate();

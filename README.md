@@ -15,8 +15,9 @@ This fork opens on the real, present-day Earth instead of a random planet:
 * **Plates** are the 52 plates of Bird's PB2002 model, each rotating about its real present-day Euler pole
   (converted to the no-net-rotation frame). The smallest microplates appear once the grid is fine enough
   (49 at the default resolution, 51 at the highest).
-* The real plates keep their present-day motions until the regular supercontinent cycle resegments the lithosphere
-  (150 million years).
+* The real plates keep their present-day motions for as long as the simulation runs. **Supercontinent Breakup** is
+  off for Earth; switching it on replaces them with plates driven by the simulator's own slab pull model.
+* **View → Plate Motion** draws arrows showing which way and how fast each plate moves.
 
 Use **Tune → Earth** to return to present-day Earth, **Tune → Randomize** for a random planet, or open
 `index.html?world=random` to start on one. Time can now run at up to **10 million years per second**.

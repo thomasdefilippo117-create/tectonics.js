@@ -82,7 +82,8 @@ function VectorRasterView(options) {
         const vector = mesh.geometry.vertices;
 
         const overlap_factor = 2;
-        const max = this.max ||  Math.max.apply(null, VectorField.magnitude(raster));
+        // (falls back to 1 when every vector is zero, e.g. before plates first move, instead of dividing by zero)
+        const max = this.max ||  Float32Dataset.max(VectorField.magnitude(raster)) || 1;
         const scaling = overlap_factor * raster.grid.average_distance / max;
 
         const pos = raster.grid.pos;

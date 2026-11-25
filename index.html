@@ -583,11 +583,20 @@
         );
     }
     // builds a new world on the given grid and swaps it into the running simulation
-    function replace_world(world_parameters, random) {
+    // "breakup" says whether the supercontinent cycle periodically resegments the plates. It defaults to off for
+    // present-day Earth, so its real plates keep their real motions, and to on for every other world.
+    function replace_world(world_parameters, random, breakup) {
         const world = new World(world_parameters);
         const info = generate_world(world, random);
-        if (!settingsVue.supercontinentBreakup) {
-            world.lithosphere.supercontinentCycle.duration = Infinity;
+        if (breakup === void 0) {
+            breakup = world.preset !== 'earth';
+        }
+        settingsVue.supercontinentBreakup = breakup? 1 : 0;
+        const cycle = world.lithosphere.supercontinentCycle;
+        if (!breakup) {
+            cycle.duration = Infinity;
+            // a world without plates still gets segmented once, on its first update
+            if (world.lithosphere.plates.length === 0) { cycle.age = Infinity; }
         }
         const universe = sim.model();
         universe.bodies[world.id] = world;
@@ -717,6 +726,8 @@
         sim.focus(world);
         if (preset === 'earth') {
             world.lithosphere.mergePlates();
+            // the real plates keep their real motions (EarthGenerator disables the supercontinent cycle)
+            settingsVue.supercontinentBreakup = 0;
             initial_notification = describe_earth(info) + ". " + initial_notification;
         }
 
@@ -1078,7 +1089,7 @@
         vectorViewOptions: [
           { name: "No Arrows", value: "disabled", icon: "icons/none.svg" },
           { name: "Mantle Flow", value: "asthenosphere_velocity", icon: "icons/fire-flow.svg" },
-          // { name: "Plate Motion", value: "plate_velocity", icon: "icons/plate-motion.svg" },
+          { name: "Plate Motion", value: "plate_velocity", icon: "icons/plate-motion.svg" },
           { name: "Wind Speed", value: "surface_air_velocity", icon: "icons/air-flow.svg" },
         ],
         projectionSelected: 'orthographic',
@@ -1098,9 +1109,8 @@
             view.setProjectionView(projectionViews[value]);
         },
         setVectorViewSelected: function(value) {
-          if (this.selected == value) { value = this.vectorViewOptions[0].value; }
-            const option = this.vectorViewOptions.filter(x => x.value == value)[0];
-            this.selected = value;
+          if (this.vectorViewSelected == value) { value = this.vectorViewOptions[0].value; }
+            this.vectorViewSelected = value;
             view.setVectorView(vectorViews[value]);
         },
         setScalarViewSelected: function(value) {
@@ -1264,7 +1274,7 @@
                 world_params.lithosphere.total_crust = undefined;
                 // with no plates left, start a fresh supercontinent cycle so plates are segmented on the first update
                 world_params.lithosphere.supercontinent_cycle = undefined;
-                replace_world(world_params, sim.random);
+                replace_world(world_params, sim.random, !!this.supercontinentBreakup);
             }
             onSimLoadStop.fire();
         }

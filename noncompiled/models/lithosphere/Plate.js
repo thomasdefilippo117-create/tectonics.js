@@ -24,6 +24,12 @@ function Plate(grid, parameters)
     // optional identifiers for plates that correspond to real ones, e.g. code 'PA', name 'Pacific'
     this.code = parameters['code'];
     this.name = parameters['name'];
+    // the rotation the plate actually made during its last move, as an Euler vector in the world frame
+    // (radians per second): the prescribed angular_velocity, or what the slab pull estimate amounted to.
+    // Used to draw plate motion arrows.
+    this.world_angular_velocity = this.angular_velocity !== void 0?
+        Vector(this.angular_velocity.x, this.angular_velocity.y, this.angular_velocity.z) :
+        Vector(0, 0, 0);
 
     this.getParameters = function() {
         const result = {
@@ -142,6 +148,25 @@ function Plate(grid, parameters)
         this.buoyancy.invalidate();
         this.velocity.invalidate();
         this.center_of_mass.invalidate();
+    }
+
+    // writes the Euler vector (radians per second) of a rotation matrix (column major) applied over `seconds`
+    function set_euler_vector_from_rotation(M, seconds, result) {
+        // the axis is proportional to the antisymmetric part; its length is 2 sin(angle)
+        const ax = M[5] - M[7];
+        const ay = M[6] - M[2];
+        const az = M[1] - M[3];
+        const length = Math.sqrt(ax*ax + ay*ay + az*az);
+        if (!(length > 0)) {
+            result.x = 0; result.y = 0; result.z = 0;
+            return result;
+        }
+        const angle = Math.atan2(length / 2, (M[0] + M[4] + M[8] - 1) / 2);
+        const scale = angle / (length * seconds);
+        result.x = ax * scale;
+        result.y = ay * scale;
+        result.z = az * scale;
+        return result;
     }
 
     // scratch space shared by every plate on the grid (plates update one at a time)
@@ -298,6 +323,11 @@ function Plate(grid, parameters)
             // the slab pull estimate is computed in the plate's own frame, so it is applied on the plate side
             const rotation_matrix = Tectonophysics.get_plate_rotation_matrix3x3(this.velocity.value(), this.center_of_mass.value(), seconds);
             Matrix3x3.mult_matrix(this.local_to_global_matrix, rotation_matrix, this.local_to_global_matrix);
+            if (seconds > 0) {
+                // the same rotation seen from the world: new local_to_global times the old global_to_local
+                const world_rotation = Matrix3x3.mult_matrix(this.local_to_global_matrix, this.global_to_local_matrix);
+                set_euler_vector_from_rotation(world_rotation, seconds, this.world_angular_velocity);
+            }
         }
         Matrix3x3.invert(this.local_to_global_matrix, this.global_to_local_matrix);
 

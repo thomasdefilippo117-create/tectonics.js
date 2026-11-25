@@ -35,6 +35,8 @@ SupercontinentCycle.prototype.isEnding = function() {
 };
 SupercontinentCycle.prototype.restart = function() {
     this.age = 0;
-    this.duration = this.getRandomDuration();
+    // a disabled cycle (infinite duration) stays disabled: it only ends once, when a world with an infinite
+    // age gets its first plates
+    this.duration = this.duration === Infinity? Infinity : this.getRandomDuration();
     this.lithosphere.resetPlates();
 }; 

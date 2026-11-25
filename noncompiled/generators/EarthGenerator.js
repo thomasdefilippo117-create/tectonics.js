@@ -269,8 +269,10 @@ EarthGenerator.generate = function(world) {
         }));
     }
 
-    // keep the real plates until the regular supercontinent cycle resegments the lithosphere
+    // keep the real plates on their real motions: the supercontinent cycle would replace them with plates driven
+    // by the slab pull estimate, moving in made-up directions (the user can still trigger a breakup by hand)
     lithosphere.supercontinentCycle.age = 0;
+    lithosphere.supercontinentCycle.duration = Infinity;
 
     return {
         plate_count: lithosphere.plates.length,
