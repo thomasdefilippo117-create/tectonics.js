@@ -4,6 +4,3 @@
 [submodule "precompiled/academics"]
 	path = precompiled/academics
 	url = https://github.com/davidson16807/tectonics.glsl.git
-[submodule "research"]
-	path = research
-	url = https://github.com/davidson16807/tectonics-research.git
